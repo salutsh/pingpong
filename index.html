@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pong Game</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #000;
+        }
+        canvas {
+            border: 1px solid #fff;
+            background-color: #000;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="pongCanvas" width="800" height="600"></canvas>
+    <script>
+        const canvas = document.getElementById('pongCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // 게임 설정
+        const paddleWidth = 10, initialPaddleHeight = 100;
+        const paddleMinHeight = 50; // 패들 최소 높이
+        let paddleHeight = initialPaddleHeight; // 현재 패들 높이
+        let ballX = canvas.width / 2, ballY = canvas.height / 2;
+        let ballSpeedX = 5, ballSpeedY = 3;
+        const initialBallSpeedX = ballSpeedX; // 공의 초기 X 속도
+        const initialBallSpeedY = ballSpeedY; // 공의 초기 Y 속도
+        let ballSize = 30; // 공의 초기 크기 (기존 크기의 3배)
+        const paddleSpeed = 10;
+        const keys = {};
+        let leftPaddleY = canvas.height / 2 - paddleHeight / 2;
+        let rightPaddleY = canvas.height / 2 - paddleHeight / 2;
+        let leftScore = 0;
+        let rightScore = 0;
+        const winningScore = 10; // 승리 점수
+        const speedIncreaseInterval = 8000; // 공 속도 증가 간격 (밀리초)
+        const speedIncreaseAmount = 0.2; // 공 속도 증가량
+        const obstacleSpawnInterval = 10000; // 방해물 생성 간격 (밀리초)
+        const obstacles = []; // 방해물 배열
+        const obstacleSize = { min: 30, max: 60 }; // 방해물 크기 범위
+        const obstacleTypes = ['rectangle', 'circle', 'triangle']; // 방해물 종류
+
+        let lastSpeedIncreaseTime = Date.now();
+        let lastObstacleSpawnTime = Date.now();
+        let totalObstaclesSpawned = 0;
+
+        // 게임 종료
+        function gameOver(winner) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#fff';
+            ctx.font = '48px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(winner + ' Wins!', canvas.width / 2, canvas.height / 2);
+            cancelAnimationFrame(animationId); // 애니메이션 루프 중지
+        }
+
+        // 초기 설정
+        function resetBall() {
+            ballX = canvas.width / 2;
+            ballY = canvas.height / 2;
+            ballSpeedX = initialBallSpeedX; // 공의 X 속도를 초기 값으로 리셋
+            ballSpeedY = initialBallSpeedY; // 공의 Y 속도를 초기 값으로 리셋
+            ballSize = 30; // 공의 초기 크기 (기존 크기의 3배)
+        }
+
+        function drawPaddle(x, y) {
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(x, y, paddleWidth, paddleHeight);
+        }
+
+        function drawBall() {
+            ctx.beginPath();
+            ctx.arc(ballX, ballY, ballSize, 0, Math.PI * 2);
+            ctx.fillStyle = '#fff';
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        function drawScores() {
+            ctx.font = '24px Arial';
+            ctx.fillStyle = '#fff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('Left Player: ' + leftScore, canvas.width / 4, 30);
+            ctx.fillText('Right Player: ' + rightScore, (canvas.width / 4) * 3, 30);
+        }
+
+        function drawObstacles() {
+            obstacles.forEach(obstacle => {
+                ctx.fillStyle = obstacle.color;
+                switch (obstacle.type) {
+                    case 'rectangle':
+                        ctx.fillRect(obstacle.x, obstacle.y, obstacle.size, obstacle.size);
+                        break;
+                    case 'circle':
+                        ctx.beginPath();
+                        ctx.arc(obstacle.x, obstacle.y, obstacle.size / 2, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.closePath();
+                        break;
+                    case 'triangle':
+                        ctx.beginPath();
+                        ctx.moveTo(obstacle.x, obstacle.y - obstacle.size / 2);
+                        ctx.lineTo(obstacle.x - obstacle.size / 2, obstacle.y + obstacle.size / 2);
+                        ctx.lineTo(obstacle.x + obstacle.size / 2, obstacle.y + obstacle.size / 2);
+                        ctx.closePath();
+                        ctx.fill();
+                        break;
+                }
+            });
+        }
+
+        function updateBallSpeed() {
+            const now = Date.now();
+            if (now - lastSpeedIncreaseTime > speedIncreaseInterval) {
+                ballSpeedX += ballSpeedX > 0 ? speedIncreaseAmount : -speedIncreaseAmount;
+                ballSpeedY += ballSpeedY > 0 ? speedIncreaseAmount : -speedIncreaseAmount;
+                lastSpeedIncreaseTime = now;
+            }
+        }
+
+        function spawnObstacles(num) {
+            for (let i = 0; i < num; i++) {
+                const type = obstacleTypes[Math.floor(Math.random() * obstacleTypes.length)];
+                const size = Math.random() * (obstacleSize.max - obstacleSize.min) + obstacleSize.min;
+                const x = Math.random() * (canvas.width - size);
+                const y = Math.random() * (canvas.height - size);
+                const color = '#' + Math.floor(Math.random() * 16777215).toString(16); // 랜덤 색상
+
+                obstacles.push({ x, y, size, type, color, collisionCount: 0 });
+                totalObstaclesSpawned += 1;
+            }
+        }
+
+        function distanceFromPointToLine(px, py, ax, ay, bx, by) {
+            const lineLength = Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2);
+            const u = ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / (lineLength ** 2);
+            const closestX = ax + u * (bx - ax);
+            const closestY = ay + u * (by - ay);
+            const dx = px - closestX;
+            const dy = py - closestY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        function pointInTriangle(px, py, ax, ay, bx, by, cx, cy) {
+            const v0x = bx - ax;
+            const v0y = by - ay;
+            const v1x = cx - ax;
+            const v1y = cy - ay;
+            const v2x = px - ax;
+            const v2y = py - ay;
+
+            const dot00 = v0x * v0x + v0y * v0y;
+            const dot01 = v0x * v1x + v0y * v1y;
+            const dot02 = v0x * v2x + v0y * v2y;
+            const dot11 = v1x * v1x + v1y * v1y;
+            const dot12 = v1x * v2x + v1y * v2y;
+
+            const invDenom = 1 / (dot00 * dot11 - dot01 * dot01);
+            const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+            const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+
+            return (u >= 0) && (v >= 0) && (u + v <= 1);
+        }
+
+        function handleObstacleCollision() {
+            obstacles.forEach(obstacle => {
+                let collision = false;
+                switch (obstacle.type) {
+                    case 'rectangle':
+                        collision = ballX + ballSize > obstacle.x &&
+                                    ballX - ballSize < obstacle.x + obstacle.size &&
+                                    ballY + ballSize > obstacle.y &&
+                                    ballY - ballSize < obstacle.y + obstacle.size;
+                        break;
+                    case 'circle':
+                        const dx = ballX - obstacle.x;
+                        const dy = ballY - obstacle.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+                        collision = distance < (obstacle.size / 2 + ballSize);
+                        break;
+                    case 'triangle':
+                        const tx = obstacle.x;
+                        const ty = obstacle.y;
+                        const ts = obstacle.size;
+                        const ax = tx;
+                        const ay = ty - ts / 2;
+                        const bx = tx - ts / 2;
+                        const by = ty + ts / 2;
+                        const cx = tx + ts / 2;
+                        const cy = ty + ts / 2;
+                        collision = pointInTriangle(ballX, ballY, ax, ay, bx, by, cx, cy);
+                        break;
+                }
+
+                if (collision) {
+                    // 공의 위치를 튕겨 나오게 하기 위한 계산
+                    const overlapX = Math.min(ballSize, obstacle.x + obstacle.size - ballX, ballX - obstacle.x);
+                    const overlapY = Math.min(ballSize, obstacle.y + obstacle.size - ballY, ballY - obstacle.y);
+
+                    if (Math.abs(overlapX) < Math.abs(overlapY)) {
+                        ballX -= overlapX;
+                        ballSpeedX = -ballSpeedX; // 공의 X 방향 속도를 반전
+                    } else {
+                        ballY -= overlapY;
+                        ballSpeedY = -ballSpeedY; // 공의 Y 방향 속도를 반전
+                    }
+
+                    // 공 크기 조절
+                    ballSize -= 2; // 방해물에 닿을 때마다 공의 크기를 2씩 줄임
+                    if (ballSize < 10) ballSize = 10; // 최소 크기 제한
+
+                    // 방해물이 2번 맞으면 사라지도록
+                    obstacle.collisionCount += 1;
+                    if (obstacle.collisionCount >= 2) {
+                        const index = obstacles.indexOf(obstacle);
+                        if (index > -1) {
+                            obstacles.splice(index, 1); // 방해물 제거
+                        }
+                    }
+                }
+            });
+        }
+
+        function handlePaddleSizeReduction() {
+            paddleHeight = initialPaddleHeight - (leftScore + rightScore) * 2; // 점수에 따라 패들 높이 감소
+            if (paddleHeight < paddleMinHeight) paddleHeight = paddleMinHeight; // 최소 높이 제한
+        }
+
+        function drawSpeed() {
+            ctx.font = '24px Arial';
+            ctx.fillStyle = '#fff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('Ball Speed: ' + Math.sqrt(ballSpeedX ** 2 + ballSpeedY ** 2).toFixed(2), canvas.width / 2, canvas.height - 30);
+        }
+
+        function draw() {
+            if (leftScore >= winningScore || rightScore >= winningScore) {
+                if (leftScore > rightScore) {
+                    gameOver('Left Player');
+                } else {
+                    gameOver('Right Player');
+                }
+                return; // 게임이 끝났으므로 더 이상 그리지 않음
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawPaddle(10, leftPaddleY);
+            drawPaddle(canvas.width - 20, rightPaddleY);
+            drawBall();
+            drawScores();
+            drawObstacles();
+            drawSpeed(); // 공의 속도 표시
+
+            // 공 속도 업데이트
+            updateBallSpeed();
+
+            // 공 이동
+            ballX += ballSpeedX;
+            ballY += ballSpeedY;
+
+            // 공 벽 충돌
+            if (ballY <= 0 || ballY >= canvas.height) {
+                ballSpeedY = -ballSpeedY;
+            }
+
+            // 공 패들 충돌
+            if (ballX <= 20 && ballY >= leftPaddleY && ballY <= leftPaddleY + paddleHeight) {
+                ballSpeedX = -ballSpeedX;
+            }
+
+            if (ballX >= canvas.width - 20 && ballY >= rightPaddleY && ballY <= rightPaddleY + paddleHeight) {
+                ballSpeedX = -ballSpeedX;
+            }
+
+            // 공이 화면 밖으로 나가면 점수 업데이트 및 공 리셋
+            if (ballX <= 0) {
+                rightScore += 1;
+                resetBall(); // 공 리셋
+            } else if (ballX >= canvas.width) {
+                leftScore += 1;
+                resetBall(); // 공 리셋
+            }
+
+            // 방해물 충돌 처리
+            handleObstacleCollision();
+
+            // 패들 사이즈 조절
+            handlePaddleSizeReduction();
+
+            // 패들 이동
+            if (keys['ArrowUp'] && rightPaddleY > 0) {
+                rightPaddleY -= paddleSpeed;
+            }
+            if (keys['ArrowDown'] && rightPaddleY < canvas.height - paddleHeight) {
+                rightPaddleY += paddleSpeed;
+            }
+            if (keys['w'] && leftPaddleY > 0) {
+                leftPaddleY -= paddleSpeed;
+            }
+            if (keys['s'] && leftPaddleY < canvas.height - paddleHeight) {
+                leftPaddleY += paddleSpeed;
+            }
+
+            // 방해물 생성
+            const now = Date.now();
+            if (now - lastObstacleSpawnTime > obstacleSpawnInterval) {
+                const obstaclesToSpawn = (totalObstaclesSpawned < 10) ? 2 : 3; // 처음 10초 동안 2개, 그 이후 20초 동안 3개 생성
+                spawnObstacles(obstaclesToSpawn);
+                lastObstacleSpawnTime = now;
+            }
+        }
+
+        let animationId;
+
+        function gameLoop() {
+            draw();
+            animationId = requestAnimationFrame(gameLoop);
+        }
+
+        // 키보드 이벤트 처리
+        window.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+        });
+
+        window.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+        });
+
+        resetBall();
+        gameLoop();
+    </script>
+</body>
+</html>
